@@ -1,0 +1,24 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":configMigration"
+  ],
+  "automerge": true,
+  "automergeType": "branch",
+  "platformAutomerge": true,
+  "ignoreTests": true,
+  "packageRules": [
+    {
+      "description": "Automerge all detected dependency updates",
+      "matchUpdateTypes": ["major", "minor", "patch", "digest"],
+      "automerge": true
+    },
+    {
+      "description": "Automerge all GitHub Actions updates including major versions",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["major", "minor", "patch", "digest"],
+      "automerge": true
+    }
+  ]
+}
