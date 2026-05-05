@@ -2,7 +2,7 @@
 set -euo pipefail
 
 APP_NAME="claude-diag"
-SCRIPT_URL="https://claude.diag.tech/claude-diag.py"
+SCRIPT_URL="https://cdiag.link/claude-diag.py"
 tmpfile=""
 
 say() {

@@ -3,7 +3,7 @@
 
 Single-file, stdlib-only. Safe to pipe over curl:
 
-    curl -fsSL https://claude.diag.tech | bash
+    curl -fsSL https://cdiag.link | bash
 
 See --help for flags.
 """
@@ -35,7 +35,7 @@ type PathInput = str | os.PathLike[str]
 type Redact = Callable[[object | None], str]
 
 __version__ = "0.1.0"
-SCRIPT_URL = "https://claude.diag.tech/claude-diag.py"
+SCRIPT_URL = "https://cdiag.link/claude-diag.py"
 PASTEMYST_API_URL = "https://paste.myst.rs/api/v2/paste"
 PASTEMYST_WEB_URL = "https://paste.myst.rs"
 PASTEMYST_EXPIRIES = ("1h", "2h", "10h", "1d", "2d", "1w", "1m", "1y", "never")

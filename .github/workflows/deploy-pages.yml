@@ -34,7 +34,7 @@ jobs:
           cp bootstrap.sh public/index.html
           cp claude-diag.py public/claude-diag.py
           touch public/.nojekyll
-          printf '%s\n' 'claude.diag.tech' > public/CNAME
+          printf '%s\n' 'cdiag.link' > public/CNAME
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
