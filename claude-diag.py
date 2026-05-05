@@ -12,6 +12,7 @@ import argparse
 import http.client
 import io
 import json
+import locale
 import os
 import platform
 import re
@@ -1186,13 +1187,89 @@ def is_interactive_terminal() -> bool:
 
 def supports_color(stream: TextIO = sys.stderr) -> bool:
     force_color = os.environ.get("FORCE_COLOR")
-    if force_color is not None and force_color != "0":
-        return True
+    if force_color == "0":
+        return False
     if os.environ.get("NO_COLOR") is not None:
         return False
     if os.environ.get("TERM") == "dumb":
         return False
+    if force_color is not None:
+        return True
     return stream.isatty()
+
+
+def supports_unicode(stream: TextIO = sys.stderr) -> bool:
+    encoding = getattr(stream, "encoding", None) or locale.getpreferredencoding(False)
+    return "utf" in encoding.lower()
+
+
+def decorated_output(stream: TextIO = sys.stderr) -> bool:
+    return stream.isatty() or supports_color(stream)
+
+
+def style_text(
+    text: str,
+    *,
+    stream: TextIO = sys.stderr,
+    color: str | None = None,
+    bold: bool = False,
+    dim: bool = False,
+) -> str:
+    if not supports_color(stream):
+        return text
+
+    codes: list[str] = []
+    if bold:
+        codes.append("1")
+    if dim:
+        codes.append("2")
+    if color == "green":
+        codes.append("32")
+    elif color == "yellow":
+        codes.append("33")
+    elif color == "red":
+        codes.append("31")
+
+    if not codes:
+        return text
+    return f"\033[{';'.join(codes)}m{text}\033[0m"
+
+
+def ui_symbol(name: str, stream: TextIO = sys.stderr) -> str:
+    unicode_symbols = {
+        "arrow": "→",
+        "success": "✓",
+        "warning": "!",
+        "error": "✕",
+    }
+    ascii_symbols = {
+        "arrow": "->",
+        "success": "OK",
+        "warning": "!",
+        "error": "ERROR",
+    }
+    symbols = unicode_symbols if supports_unicode(stream) else ascii_symbols
+    return symbols[name]
+
+
+def ui_status(
+    message: str,
+    *,
+    kind: str = "info",
+    stream: TextIO = sys.stderr,
+) -> str:
+    if not decorated_output(stream):
+        return f"[claude-diag] {message}"
+
+    if kind == "success":
+        mark = style_text(ui_symbol("success", stream), stream=stream, color="green")
+    elif kind == "warning":
+        mark = style_text(ui_symbol("warning", stream), stream=stream, color="yellow")
+    elif kind == "error":
+        mark = style_text(ui_symbol("error", stream), stream=stream, color="red")
+    else:
+        mark = style_text(ui_symbol("arrow", stream), stream=stream, dim=True)
+    return f"{mark} {message}"
 
 
 def prompt_confirm(
@@ -1203,8 +1280,15 @@ def prompt_confirm(
     output_stream: TextIO = sys.stderr,
 ) -> bool:
     suffix = " [Y/n] " if default else " [y/N] "
+    if decorated_output(output_stream):
+        rendered_prompt = style_text(prompt, stream=output_stream, bold=True)
+        rendered_suffix = style_text(suffix, stream=output_stream, dim=True)
+    else:
+        rendered_prompt = prompt
+        rendered_suffix = suffix
+
     while True:
-        _ = output_stream.write(f"{prompt}{suffix}")
+        _ = output_stream.write(f"{rendered_prompt}{rendered_suffix}")
         output_stream.flush()
         reply = input_stream.readline()
         if reply == "":
@@ -1218,7 +1302,17 @@ def prompt_confirm(
             return True
         if normalized in {"n", "no"}:
             return False
-        _ = output_stream.write("Please answer yes or no.\n")
+        if decorated_output(output_stream):
+            _ = output_stream.write(
+                ui_status(
+                    "Please answer yes or no.",
+                    kind="warning",
+                    stream=output_stream,
+                )
+                + "\n"
+            )
+        else:
+            _ = output_stream.write("Please answer yes or no.\n")
 
 
 def prompt_select(
@@ -1232,11 +1326,28 @@ def prompt_select(
         raise ValueError("prompt_select requires at least one choice")
 
     width = len(str(len(choices)))
+    styled = decorated_output(output_stream)
     while True:
-        _ = output_stream.write(f"{prompt}\n")
+        if styled:
+            _ = output_stream.write(
+                f"{style_text(prompt, stream=output_stream, bold=True)}\n"
+            )
+        else:
+            _ = output_stream.write(f"{prompt}\n")
         for index, choice in enumerate(choices, start=1):
-            _ = output_stream.write(f"  {index:>{width}}. {choice}\n")
-        _ = output_stream.write(f"Select [1-{len(choices)}]: ")
+            number = f"{index:>{width}}."
+            if styled:
+                number = style_text(number, stream=output_stream, dim=True)
+            _ = output_stream.write(f"  {number} {choice}\n")
+        if styled:
+            selector = style_text(
+                ui_symbol("arrow", output_stream),
+                stream=output_stream,
+                dim=True,
+            )
+            _ = output_stream.write(f"{selector} Select [1-{len(choices)}]: ")
+        else:
+            _ = output_stream.write(f"Select [1-{len(choices)}]: ")
         output_stream.flush()
 
         reply = input_stream.readline()
@@ -1249,7 +1360,19 @@ def prompt_select(
             selected = int(normalized)
             if 1 <= selected <= len(choices):
                 return selected - 1
-        _ = output_stream.write(f"Please enter a number from 1 to {len(choices)}.\n")
+        if styled:
+            _ = output_stream.write(
+                ui_status(
+                    f"Please enter a number from 1 to {len(choices)}.",
+                    kind="warning",
+                    stream=output_stream,
+                )
+                + "\n"
+            )
+        else:
+            _ = output_stream.write(
+                f"Please enter a number from 1 to {len(choices)}.\n"
+            )
 
 
 # ----------------------------------------------------------------- self-test --
@@ -1838,7 +1961,20 @@ def write_progress(
     progress_stream: TextIO | None,
 ) -> None:
     if progress_stream is not None:
-        print(f"[{index:02d}/{total:02d}] {label}", file=progress_stream)
+        if decorated_output(progress_stream):
+            count = style_text(
+                f"{index:02d}/{total:02d}",
+                stream=progress_stream,
+                dim=True,
+            )
+            arrow = style_text(
+                ui_symbol("arrow", progress_stream),
+                stream=progress_stream,
+                dim=True,
+            )
+            print(f"{count} {arrow} {label}", file=progress_stream)
+        else:
+            print(f"[{index:02d}/{total:02d}] {label}", file=progress_stream)
 
 
 def build_report(
@@ -1902,10 +2038,21 @@ def save_report(
     try:
         _ = Path(out_path).write_text(report, encoding="utf-8")
     except Exception as e:
-        print(f"[claude-diag] failed to write {out_path}: {e}", file=output_stream)
+        print(
+            ui_status(
+                f"failed to write {out_path}: {e}",
+                kind="error",
+                stream=output_stream,
+            ),
+            file=output_stream,
+        )
         return None
     print(
-        f"[claude-diag] wrote {out_path} " + f"({len(report):,} bytes)",
+        ui_status(
+            f"wrote {out_path} ({len(report):,} bytes)",
+            kind="success",
+            stream=output_stream,
+        ),
         file=output_stream,
     )
     return out_path
@@ -1927,9 +2074,19 @@ def publish_report(
     try:
         url = publisher(report, expiry)
     except PublishError as e:
-        print(f"[claude-diag] publish failed: {e}", file=output_stream)
+        print(
+            ui_status(f"publish failed: {e}", kind="error", stream=output_stream),
+            file=output_stream,
+        )
         return False
-    print(f"[claude-diag] published: {url} (expires {expiry})", file=output_stream)
+    print(
+        ui_status(
+            f"published: {url} (expires {expiry})",
+            kind="success",
+            stream=output_stream,
+        ),
+        file=output_stream,
+    )
     return True
 
 
@@ -1970,7 +2127,10 @@ def finish_report(
         ):
             return 1
     else:
-        print("[claude-diag] publish skipped", file=output_stream)
+        print(
+            ui_status("publish skipped", kind="warning", stream=output_stream),
+            file=output_stream,
+        )
 
     if args.no_save:
         write_report_stdout(report, stdout_stream)
@@ -1985,7 +2145,10 @@ def finish_report(
         write_report_stdout(report, stdout_stream)
     elif saved_path is not None:
         print(
-            f"[claude-diag] view later: cat {shlex.quote(saved_path)}",
+            ui_status(
+                f"view later: cat {shlex.quote(saved_path)}",
+                stream=output_stream,
+            ),
             file=output_stream,
         )
     return 0
@@ -1999,8 +2162,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not args.yes:
         if not is_interactive_terminal():
             print(
-                "[claude-diag] interactive terminal required; rerun with --yes "
-                + "for intentional automation.",
+                ui_status(
+                    "interactive terminal required; rerun with --yes "
+                    + "for intentional automation.",
+                    kind="error",
+                    stream=sys.stderr,
+                ),
                 file=sys.stderr,
             )
             return 2
@@ -2016,7 +2183,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         if choice == 1:
             args.no_context = True
         elif choice == 2:
-            print("[claude-diag] cancelled", file=sys.stderr)
+            print(
+                ui_status("cancelled", kind="warning", stream=sys.stderr),
+                file=sys.stderr,
+            )
             return 0
 
     redact = Redactor()

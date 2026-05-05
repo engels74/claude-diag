@@ -8,13 +8,110 @@ tmpfile=""
 PYTHON_BIN=""
 PYTHON_VERSION=""
 SKIPPED_CANDIDATES=()
+COLOR_ENABLED=0
+UNICODE_ENABLED=0
+
+detect_color() {
+  if [ -n "${NO_COLOR:-}" ]; then
+    COLOR_ENABLED=0
+  elif [ "${FORCE_COLOR:-}" = "0" ]; then
+    COLOR_ENABLED=0
+  elif [ "${TERM:-}" = "dumb" ]; then
+    COLOR_ENABLED=0
+  elif [ -n "${FORCE_COLOR:-}" ]; then
+    COLOR_ENABLED=1
+  elif [ -t 1 ] || [ -t 2 ]; then
+    COLOR_ENABLED=1
+  else
+    COLOR_ENABLED=0
+  fi
+}
+
+detect_unicode() {
+  case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+    *[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*) UNICODE_ENABLED=1 ;;
+    *) UNICODE_ENABLED=0 ;;
+  esac
+}
+
+style() {
+  local code="$1"
+  shift
+  if [ "$COLOR_ENABLED" -eq 1 ]; then
+    printf '\033[%sm%s\033[0m' "$code" "$*"
+  else
+    printf '%s' "$*"
+  fi
+}
+
+bold() {
+  style "1" "$*"
+}
+
+dim() {
+  style "2" "$*"
+}
+
+green() {
+  style "32" "$*"
+}
+
+yellow() {
+  style "33" "$*"
+}
+
+red() {
+  style "31" "$*"
+}
+
+symbol() {
+  local name="$1"
+  if [ "$UNICODE_ENABLED" -eq 1 ]; then
+    case "$name" in
+      bullet) printf '•' ;;
+      ok) printf '✓' ;;
+      warn) printf '!' ;;
+      error) printf '✕' ;;
+      arrow) printf '→' ;;
+    esac
+  else
+    case "$name" in
+      bullet) printf '-' ;;
+      ok) printf 'OK' ;;
+      warn) printf '!' ;;
+      error) printf 'ERROR' ;;
+      arrow) printf '->' ;;
+    esac
+  fi
+}
 
 say() {
   printf '%s\n' "$*" > /dev/tty
 }
 
+status() {
+  local kind="$1"
+  shift
+  local mark
+  mark="$(symbol "$kind")"
+  case "$kind" in
+    ok) say "$(green "$mark") $*" ;;
+    warn) say "$(yellow "$mark") $*" ;;
+    error) say "$(red "$mark") $*" ;;
+    *) say "$mark $*" ;;
+  esac
+}
+
+step() {
+  say "$(dim "$(symbol arrow)") $*"
+}
+
 die() {
-  printf '%s\n' "$APP_NAME: $*" >&2
+  if [ "$COLOR_ENABLED" -eq 1 ]; then
+    printf '%s\n' "$(red "$(symbol error)") $APP_NAME: $*" >&2
+  else
+    printf '%s\n' "$APP_NAME: $*" >&2
+  fi
   exit 1
 }
 
@@ -36,32 +133,37 @@ on_signal() {
 trap cleanup EXIT
 trap on_signal HUP INT TERM
 
+detect_color
+detect_unicode
+
 if [ ! -r /dev/tty ] || [ ! -w /dev/tty ]; then
   printf '%s\n' "$APP_NAME: interactive terminal required (/dev/tty unavailable)." >&2
   exit 1
 fi
 
 say ""
-say "claude-diag"
-say "Repository: $REPOSITORY_URL"
+say "$(bold "claude-diag")"
+say "Redacted Claude Code diagnostics for sharing and support."
+say "$(dim "Repository: $REPOSITORY_URL")"
 say ""
-say "This bootstrap will:"
-say "- choose a compatible Python runtime (3.12+, preferring 3.14)"
-say "- download the diagnostic script"
-say "- run it locally and redact sensitive values before output"
+say "This will:"
+say "  $(symbol bullet) choose a compatible Python runtime (3.12+, preferring 3.14)"
+say "  $(symbol bullet) download the diagnostic script"
+say "  $(symbol bullet) run locally and redact sensitive values before output"
 say ""
 
-printf 'Continue? [y/N] ' > /dev/tty
+printf '%s ' "$(bold "Continue?")$(dim " [y/N]")" > /dev/tty
 IFS= read -r reply < /dev/tty || die "failed to read from /dev/tty"
 
 case "$reply" in
   [yY]|[yY][eE][sS]) ;;
   *)
-    say "Cancelled."
+    status warn "Cancelled."
     exit 0
     ;;
 esac
 
+step "Checking prerequisites"
 command -v curl >/dev/null 2>&1 || die "curl is required."
 
 try_python() {
@@ -93,6 +195,7 @@ find_path_command() {
   type -P "$name" 2>/dev/null || true
 }
 
+step "Selecting Python runtime"
 for version in 3.14 3.13 3.12; do
   for prefix in /opt/homebrew /usr/local; do
     try_python "$prefix/bin/python$version" && break 2
@@ -115,27 +218,28 @@ if [ -z "$PYTHON_BIN" ]; then
 fi
 
 if [ ${#SKIPPED_CANDIDATES[@]} -gt 0 ]; then
-  say "Skipped Python candidates:"
+  say "$(dim "Skipped Python candidates:")"
   for item in "${SKIPPED_CANDIDATES[@]}"; do
-    say "- $item"
+    say "$(dim "  $(symbol bullet) $item")"
   done
 fi
 
 if [ -z "$PYTHON_BIN" ]; then
   say ""
-  say "No compatible Python runtime was found."
+  status error "No compatible Python runtime was found."
   say "Install one of:"
-  say "- brew install python3"
-  say "- uv python install 3.14"
+  say "  $(symbol bullet) brew install python3"
+  say "  $(symbol bullet) uv python install 3.14"
   exit 1
 fi
 
-say "Using Python: $PYTHON_BIN ($PYTHON_VERSION)"
+status ok "Using Python: $PYTHON_BIN ($PYTHON_VERSION)"
 
 tmpfile="$(mktemp "${TMPDIR:-/tmp}/claude-diag.XXXXXX")"
 chmod 600 "$tmpfile"
 
-say "Downloading diagnostic script..."
+step "Downloading diagnostic script"
 curl -fsSL "$SCRIPT_URL" -o "$tmpfile"
 
+step "Handing off to diagnostics"
 "$PYTHON_BIN" "$tmpfile" "$@" < /dev/tty
