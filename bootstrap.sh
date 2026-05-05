@@ -2,7 +2,7 @@
 set -euo pipefail
 
 APP_NAME="claude-diag"
-SCRIPT_URL="https://cdiag.link/claude-diag.py"
+SCRIPT_URL="https://sh.cdiag.link/claude-diag.py"
 REPOSITORY_URL="https://github.com/engels74/claude-diag"
 tmpfile=""
 PYTHON_BIN=""

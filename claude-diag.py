@@ -3,7 +3,7 @@
 
 Single-file, stdlib-only. Safe to pipe over curl:
 
-    curl -fsSL https://cdiag.link | bash
+    curl -fsSL https://sh.cdiag.link | bash
 
 See --help for flags.
 """
