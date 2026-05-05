@@ -3,12 +3,13 @@
 
 Single-file, stdlib-only. Safe to pipe over curl:
 
-    curl -fsSL https://raw.githubusercontent.com/engels74/arrsenal-of-scripts/refs/heads/main/miscellaneous/claude/claude-diag.py | python3 -
+    curl -fsSL https://claude.diag.tech | bash
 
 See --help for flags.
 """
 
 import argparse
+import io
 import json
 import os
 import platform
@@ -25,7 +26,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path, PurePosixPath
-from typing import ClassVar, cast
+from typing import ClassVar, TextIO, cast
 from zoneinfo import ZoneInfo
 
 type JsonObject = dict[str, JsonValue]
@@ -34,10 +35,7 @@ type PathInput = str | os.PathLike[str]
 type Redact = Callable[[object | None], str]
 
 __version__ = "0.1.0"
-SCRIPT_URL = (
-    "https://raw.githubusercontent.com/engels74/arrsenal-of-scripts/refs/heads/"
-    "main/miscellaneous/claude/claude-diag.py"
-)
+SCRIPT_URL = "https://claude.diag.tech/claude-diag.py"
 PASTEMYST_API_URL = "https://paste.myst.rs/api/v2/paste"
 PASTEMYST_WEB_URL = "https://paste.myst.rs"
 PASTEMYST_EXPIRIES = ("1h", "2h", "10h", "1d", "2d", "1w", "1m", "1y", "never")
@@ -1166,6 +1164,81 @@ def publish_to_pastemyst(report: str, expires_in: str) -> str:
     return parse_pastemyst_publish_url(raw)
 
 
+# ---------------------------------------------------------------------- cli --
+
+
+def is_interactive_terminal() -> bool:
+    return sys.stdin.isatty() and sys.stderr.isatty()
+
+
+def supports_color(stream: TextIO = sys.stderr) -> bool:
+    force_color = os.environ.get("FORCE_COLOR")
+    if force_color is not None and force_color != "0":
+        return True
+    if os.environ.get("NO_COLOR") is not None:
+        return False
+    if os.environ.get("TERM") == "dumb":
+        return False
+    return stream.isatty()
+
+
+def prompt_confirm(
+    prompt: str,
+    *,
+    default: bool = False,
+    input_stream: TextIO = sys.stdin,
+    output_stream: TextIO = sys.stderr,
+) -> bool:
+    suffix = " [Y/n] " if default else " [y/N] "
+    while True:
+        output_stream.write(f"{prompt}{suffix}")
+        output_stream.flush()
+        reply = input_stream.readline()
+        if reply == "":
+            output_stream.write("\n")
+            return default
+
+        normalized = reply.strip().lower()
+        if not normalized:
+            return default
+        if normalized in {"y", "yes"}:
+            return True
+        if normalized in {"n", "no"}:
+            return False
+        output_stream.write("Please answer yes or no.\n")
+
+
+def prompt_select(
+    prompt: str,
+    choices: Sequence[str],
+    *,
+    input_stream: TextIO = sys.stdin,
+    output_stream: TextIO = sys.stderr,
+) -> int:
+    if not choices:
+        raise ValueError("prompt_select requires at least one choice")
+
+    width = len(str(len(choices)))
+    while True:
+        output_stream.write(f"{prompt}\n")
+        for index, choice in enumerate(choices, start=1):
+            output_stream.write(f"  {index:>{width}}. {choice}\n")
+        output_stream.write(f"Select [1-{len(choices)}]: ")
+        output_stream.flush()
+
+        reply = input_stream.readline()
+        if reply == "":
+            output_stream.write("\n")
+            return len(choices) - 1
+
+        normalized = reply.strip()
+        if normalized.isdecimal():
+            selected = int(normalized)
+            if 1 <= selected <= len(choices):
+                return selected - 1
+        output_stream.write(f"Please enter a number from 1 to {len(choices)}.\n")
+
+
 # ----------------------------------------------------------------- self-test --
 
 SELF_TEST_FIXTURE = """
@@ -1254,6 +1327,7 @@ def self_test() -> int:
     print(out)
     context_failures = _self_test_context()
     publish_failures = _self_test_publish()
+    prompt_failures = _self_test_prompts()
     print("=== checks ===")
     if failures:
         print(f"FAIL: leaked substrings: {failures}")
@@ -1265,12 +1339,15 @@ def self_test() -> int:
         print(f"FAIL: {failure}")
     for failure in publish_failures:
         print(f"FAIL: {failure}")
+    for failure in prompt_failures:
+        print(f"FAIL: {failure}")
     ok = (
         not failures
         and not missing
         and not private_dropped
         and not context_failures
         and not publish_failures
+        and not prompt_failures
     )
     print("RESULT:", "OK" if ok else "FAIL")
     return 0 if ok else 1
@@ -1452,7 +1529,63 @@ def _self_test_publish() -> list[str]:
     return failures
 
 
-# ---------------------------------------------------------------------- cli --
+def _self_test_prompts() -> list[str]:
+    failures: list[str] = []
+
+    confirm_cases = [
+        ("y\n", False, True, "confirm y"),
+        ("yes\n", False, True, "confirm yes"),
+        ("n\n", True, False, "confirm n"),
+        ("no\n", True, False, "confirm no"),
+        ("\n", True, True, "confirm default yes"),
+        ("\n", False, False, "confirm default no"),
+        ("maybe\ny\n", False, True, "confirm retry"),
+    ]
+    for raw, default, expected, label in confirm_cases:
+        got = prompt_confirm(
+            "Continue?",
+            default=default,
+            input_stream=io.StringIO(raw),
+            output_stream=io.StringIO(),
+        )
+        if got is not expected:
+            failures.append(f"{label} returned {got}, expected {expected}")
+
+    selected = prompt_select(
+        "Mode",
+        ["Run diagnostics", "Run diagnostics without /context", "Cancel"],
+        input_stream=io.StringIO("2\n"),
+        output_stream=io.StringIO(),
+    )
+    if selected != 1:
+        failures.append(f"prompt_select returned {selected}, expected 1")
+
+    prompt_output = io.StringIO()
+    selected = prompt_select(
+        "Mode",
+        [f"Choice {i}" for i in range(1, 13)],
+        input_stream=io.StringIO("bad\n12\n"),
+        output_stream=prompt_output,
+    )
+    if selected != 11:
+        failures.append(f"prompt_select retry returned {selected}, expected 11")
+    rendered = prompt_output.getvalue()
+    if "   1. Choice 1" not in rendered or "  12. Choice 12" not in rendered:
+        failures.append("prompt_select did not align numbered choices")
+
+    selected = prompt_select(
+        "Mode",
+        ["Run", "Cancel"],
+        input_stream=io.StringIO(""),
+        output_stream=io.StringIO(),
+    )
+    if selected != 1:
+        failures.append(f"prompt_select EOF returned {selected}, expected cancel")
+
+    return failures
+
+
+# --------------------------------------------------------------- argparse --
 
 
 class Args(argparse.Namespace):
@@ -1460,6 +1593,7 @@ class Args(argparse.Namespace):
     include_memories: bool = False
     no_context: bool = False
     no_save: bool = False
+    yes: bool = False
     model: str | None = None
     publish: bool = False
     publish_expiry: str = "1w"
@@ -1492,6 +1626,11 @@ def parse_args(argv: Sequence[str]) -> Args:
         "--no-save",
         action="store_true",
         help="Print to stdout only; do not write a file.",
+    )
+    _ = p.add_argument(
+        "--yes",
+        action="store_true",
+        help="Run without interactive confirmation prompts.",
     )
     _ = p.add_argument(
         "--model",
@@ -1564,6 +1703,35 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv if argv is not None else sys.argv[1:])
     if args.self_test:
         return self_test()
+
+    if not args.yes:
+        if not is_interactive_terminal():
+            print(
+                "[claude-diag] interactive terminal required; rerun with --yes "
+                "for intentional automation.",
+                file=sys.stderr,
+            )
+            return 2
+
+        choice = prompt_select(
+            "claude-diag diagnostics",
+            [
+                "Run diagnostics with current flags",
+                "Run diagnostics without /context",
+                "Cancel",
+            ],
+        )
+        if choice == 1:
+            args.no_context = True
+        elif choice == 2:
+            print("[claude-diag] cancelled", file=sys.stderr)
+            return 0
+
+        if args.publish and not prompt_confirm(
+            f"Upload redacted report to PasteMyst (expires {args.publish_expiry})?"
+        ):
+            args.publish = False
+            print("[claude-diag] publish skipped", file=sys.stderr)
 
     redact = Redactor()
     if args.debug:
