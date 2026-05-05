@@ -50,18 +50,25 @@ UTC = ZoneInfo("UTC")
 
 # ---------------------------------------------------------------- redactor --
 
+
 class Redactor:
     PATTERNS: ClassVar[tuple[tuple[re.Pattern[str], str], ...]] = (
         (re.compile(r"sk-ant-[A-Za-z0-9_\-]+"), "[REDACTED:ANTHROPIC_KEY]"),
         (re.compile(r"sk-[A-Za-z0-9_\-]{20,}"), "[REDACTED:OPENAI_KEY]"),
         (re.compile(r"gh[posru]_[A-Za-z0-9]{30,}"), "[REDACTED:GITHUB_TOKEN]"),
         (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "[REDACTED:AWS_KEY]"),
-        (re.compile(r"eyJ[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+"),
-         "[REDACTED:JWT]"),
-        (re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"),
-         "[REDACTED:EMAIL]"),
-        (re.compile(r"\bBearer\s+[A-Za-z0-9._\-]+", re.IGNORECASE),
-         "Bearer [REDACTED]"),
+        (
+            re.compile(r"eyJ[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+"),
+            "[REDACTED:JWT]",
+        ),
+        (
+            re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"),
+            "[REDACTED:EMAIL]",
+        ),
+        (
+            re.compile(r"\bBearer\s+[A-Za-z0-9._\-]+", re.IGNORECASE),
+            "Bearer [REDACTED]",
+        ),
     )
     IPV4: ClassVar[re.Pattern[str]] = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
     URL_QS: ClassVar[re.Pattern[str]] = re.compile(r"(https?://[^\s?#]+)\?[^\s#]*")
@@ -144,7 +151,7 @@ class Redactor:
             return ""
         prefix = f"{self.home_path}/"
         if path.startswith(prefix):
-            return path[len(prefix):]
+            return path[len(prefix) :]
         return ""
 
     def _home_path_alias(self, parent: str) -> str:
@@ -156,7 +163,7 @@ class Redactor:
     def _homeish_path(self, m: re.Match[str]) -> str:
         path = m.group(0)
         trimmed = path.rstrip("/")
-        trailing = path[len(trimmed):]
+        trailing = path[len(trimmed) :]
         rel = ""
 
         if trimmed.startswith("~/"):
@@ -215,8 +222,9 @@ class Redactor:
         if len(self.hostname) > 2:
             s = s.replace(self.hostname, "[REDACTED:HOSTNAME]")
         if len(self.short_hostname) > 2 and self.short_hostname != self.hostname:
-            s = re.sub(rf"\b{re.escape(self.short_hostname)}\b",
-                       "[REDACTED:HOSTNAME]", s)
+            s = re.sub(
+                rf"\b{re.escape(self.short_hostname)}\b", "[REDACTED:HOSTNAME]", s
+            )
         s = self._redact_paths(s)
         return s
 
@@ -260,6 +268,7 @@ class UsageSummary:
 
 
 # ----------------------------------------------------------------- helpers --
+
 
 def run(cmd: Sequence[str], timeout: int) -> tuple[str, int]:
     try:
@@ -516,6 +525,7 @@ def format_usage_summary(summary: UsageSummary | None) -> str:
 
 # ---------------------------------------------------------------- sections --
 
+
 def section_header() -> str:
     now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
     return (
@@ -552,9 +562,13 @@ def section_claude(redact: Redact, timeout: int) -> str:
     version, _ = run(["claude", "--version"], timeout)
     path = shutil.which("claude") or "[not on PATH]"
     auth_env_keys = [
-        "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
-        "ANTHROPIC_BASE_URL", "ANTHROPIC_VERTEX_PROJECT_ID",
-        "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_VERTEX_PROJECT_ID",
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_VERTEX",
     ]
     auth_present = {k: ("set" if os.environ.get(k) else "unset") for k in auth_env_keys}
     creds_path = CLAUDE_DIR / ".credentials.json"
@@ -579,7 +593,11 @@ def section_context(
     if skip:
         return "## `/context` output\n\n_skipped via `--no-context`_\n", None
     cmd = [
-        "claude", "-p", "/context", "--output-format", "json",
+        "claude",
+        "-p",
+        "/context",
+        "--output-format",
+        "json",
     ]
     if model:
         cmd.extend(("--model", model))
@@ -642,12 +660,21 @@ def _settings_summary(data: JsonObject, redact: Redact) -> str:
         lines.append(f"- enabledPlugins ({len(plugins)}):")
         for k in sorted(plugins.keys()):
             lines.append(f"  - `{redact(k)}`: {plugins[k]}")
-    flags = sorted(k for k in data.keys()
-                   if k.startswith(("CLAUDE_CODE_", "ENABLE_CLAUDEAI_", "DISABLE_")))
+    flags = sorted(
+        k
+        for k in data.keys()
+        if k.startswith(("CLAUDE_CODE_", "ENABLE_CLAUDEAI_", "DISABLE_"))
+    )
     if flags:
         lines.append(f"- feature flags: {', '.join(flags)}")
-    for k in ("model", "outputStyle", "theme", "includeCoAuthoredBy",
-              "verbose", "autoUpdates"):
+    for k in (
+        "model",
+        "outputStyle",
+        "theme",
+        "includeCoAuthoredBy",
+        "verbose",
+        "autoUpdates",
+    ):
         if k in data:
             lines.append(f"- `{k}`: `{redact(data[k])}`")
     return "\n".join(lines)
@@ -666,9 +693,13 @@ def section_global_settings(redact: Redact) -> str:
             out.append(f"### `~/.claude/{fname}`\n\n_parse error: {redact(str(e))}_\n")
             continue
         if isinstance(data, dict):
-            out.append(f"### `~/.claude/{fname}`\n\n" + _settings_summary(data, redact) + "\n")
+            out.append(
+                f"### `~/.claude/{fname}`\n\n" + _settings_summary(data, redact) + "\n"
+            )
         else:
-            out.append(f"### `~/.claude/{fname}`\n\n_malformed: expected JSON object_\n")
+            out.append(
+                f"### `~/.claude/{fname}`\n\n_malformed: expected JSON object_\n"
+            )
     return "\n".join(out)
 
 
@@ -728,15 +759,20 @@ def section_plugins(redact: Redact, timeout: int) -> str:
     if plugin_json.exists():
         try:
             data = load_json_text(plugin_json.read_text())
-            count = sum(len(v) if isinstance(v, dict) else 0 for v in data.values()) \
-                if isinstance(data, dict) else 0
+            count = (
+                sum(len(v) if isinstance(v, dict) else 0 for v in data.values())
+                if isinstance(data, dict)
+                else 0
+            )
             parts.append(
                 "\n- `installed_plugins.json` size: "
                 + f"{humansize(plugin_json.stat().st_size)}, "
                 + f"~{count} entries\n"
             )
         except Exception as e:
-            parts.append(f"\n- `installed_plugins.json` parse error: {redact(str(e))}\n")
+            parts.append(
+                f"\n- `installed_plugins.json` parse error: {redact(str(e))}\n"
+            )
     return "\n".join(parts)
 
 
@@ -779,13 +815,16 @@ def section_agents(redact: Redact, include_memories: bool) -> str:
         if include_memories:
             content = safe_read(e)
             if content is not None:
-                bodies.append(f"### `{redact(e.name)}`\n\n"
-                              + code_block(redact(content), "markdown"))
+                bodies.append(
+                    f"### `{redact(e.name)}`\n\n"
+                    + code_block(redact(content), "markdown")
+                )
     if rows:
         lines.append("\n".join(rows))
     if bodies:
-        lines.append("\n" + details("Agent bodies (`--include-memories`)",
-                                    "\n\n".join(bodies)))
+        lines.append(
+            "\n" + details("Agent bodies (`--include-memories`)", "\n\n".join(bodies))
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -794,7 +833,9 @@ def section_commands(redact: Redact) -> str:
     if not cmd_dir.exists():
         return "## Slash commands\n\n_`~/.claude/commands/` not present_\n"
     entries = sorted(p for p in cmd_dir.iterdir() if not p.name.startswith("."))
-    lines = [f"## Slash commands\n\n_{len(entries)} entries in `~/.claude/commands/`_\n"]
+    lines = [
+        f"## Slash commands\n\n_{len(entries)} entries in `~/.claude/commands/`_\n"
+    ]
     rows: list[str] = []
     for e in entries:
         suffix = "/" if e.is_dir() else ""
@@ -832,11 +873,12 @@ def section_memories(redact: Redact, include_memories: bool) -> str:
             + f"{n_imports} `@imports`"
         )
         if include_memories:
-            bodies.append(f"### `{label}`\n\n"
-                          + code_block(redact(text), "markdown"))
+            bodies.append(f"### `{label}`\n\n" + code_block(redact(text), "markdown"))
     if bodies:
-        lines.append("\n" + details("Memory file bodies (`--include-memories`)",
-                                    "\n\n".join(bodies)))
+        lines.append(
+            "\n"
+            + details("Memory file bodies (`--include-memories`)", "\n\n".join(bodies))
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -851,8 +893,10 @@ def section_hooks(redact: Redact) -> str:
     hooks = data.get("hooks") if isinstance(data, dict) else None
     if not isinstance(hooks, dict) or not hooks:
         return "## Hooks\n\n_no hooks configured_\n"
-    lines = ["## Hooks\n",
-             "_Event names and counts only — command bodies are never printed._\n"]
+    lines = [
+        "## Hooks\n",
+        "_Event names and counts only — command bodies are never printed._\n",
+    ]
     for event in sorted(hooks.keys()):
         entries = hooks[event]
         if not isinstance(entries, list):
@@ -876,15 +920,33 @@ def section_hooks(redact: Redact) -> str:
 
 
 def section_state_footprint(_redact: Redact) -> str:
-    dirs = ["projects", "debug", "telemetry", "plans", "todos",
-            "paste-cache", "file-history", "shell-snapshots",
-            "sessions", "session-env", "tasks", "teams",
-            "plugins", "skills", "agents", "commands", "hud", "cache",
-            "backups"]
-    lines = ["## State footprint\n",
-             "_sizes under `~/.claude/`_\n",
-             "| dir | size | files |",
-             "| --- | --- | --- |"]
+    dirs = [
+        "projects",
+        "debug",
+        "telemetry",
+        "plans",
+        "todos",
+        "paste-cache",
+        "file-history",
+        "shell-snapshots",
+        "sessions",
+        "session-env",
+        "tasks",
+        "teams",
+        "plugins",
+        "skills",
+        "agents",
+        "commands",
+        "hud",
+        "cache",
+        "backups",
+    ]
+    lines = [
+        "## State footprint\n",
+        "_sizes under `~/.claude/`_\n",
+        "| dir | size | files |",
+        "| --- | --- | --- |",
+    ]
     grand = 0
     for d in dirs:
         p = CLAUDE_DIR / d
@@ -932,8 +994,7 @@ def section_activity(redact: Redact) -> str:
             if tool_totals:
                 top = sorted(tool_totals.items(), key=lambda x: -x[1])[:8]
                 lines.append(
-                    "- top tools (by count): "
-                    + ", ".join(f"`{k}`:{v}" for k, v in top)
+                    "- top tools (by count): " + ", ".join(f"`{k}`:{v}" for k, v in top)
                 )
         except Exception as e:
             lines.append(f"- session stats parse error: {redact(str(e))}")
@@ -951,8 +1012,11 @@ def section_activity(redact: Redact) -> str:
     projects_dir = CLAUDE_DIR / "projects"
     if projects_dir.exists():
         try:
-            n = sum(1 for p in projects_dir.iterdir()
-                    if p.is_dir() and not p.name.startswith("."))
+            n = sum(
+                1
+                for p in projects_dir.iterdir()
+                if p.is_dir() and not p.name.startswith(".")
+            )
             lines.append(f"- distinct projects under `~/.claude/projects/`: {n}")
         except Exception:
             pass
@@ -963,8 +1027,11 @@ def section_recent_errors(redact: Redact, limit: int = 20) -> str:
     tdir = CLAUDE_DIR / "telemetry"
     if not tdir.exists():
         return "## Recent errors\n\n_`~/.claude/telemetry/` not present_\n"
-    files = sorted(tdir.glob("1p_failed_events.*.json"),
-                   key=lambda p: p.stat().st_mtime, reverse=True)
+    files = sorted(
+        tdir.glob("1p_failed_events.*.json"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
     if not files:
         return "## Recent errors\n\n_no `1p_failed_events.*.json` files_\n"
     counts: dict[str, int] = {}
@@ -982,8 +1049,11 @@ def section_recent_errors(redact: Redact, limit: int = 20) -> str:
                     name: JsonValue = None
                     if isinstance(ev, dict):
                         event_data = ev.get("event_data")
-                        name = event_data.get("event_name") \
-                            if isinstance(event_data, dict) else None
+                        name = (
+                            event_data.get("event_name")
+                            if isinstance(event_data, dict)
+                            else None
+                        )
                         name = name or ev.get("event_name") or ev.get("event_type")
                     if name:
                         name_text = str(name)
@@ -1013,7 +1083,8 @@ def section_footer(
 ) -> str:
     usage_line = (
         "Run usage: not available (/context skipped)."
-        if context_skipped else format_usage_summary(usage_summary)
+        if context_skipped
+        else format_usage_summary(usage_summary)
     )
     return (
         "## About\n\n"
@@ -1025,6 +1096,7 @@ def section_footer(
 
 
 # ------------------------------------------------------------------ publish --
+
 
 class PublishError(Exception):
     """Publish action failed after the local report was generated."""
@@ -1117,13 +1189,13 @@ url: https://api.example.com/v1?api_key=zzz
 header: Authorization: Bearer abc.def.ghi
 """
 
+
 def self_test() -> int:
     r = Redactor()
     cwd_tilde = f"~/{r.cwd_home_path}" if r.cwd_home_path else r.cwd_path
     encoded_project = r.cwd_path.replace("/", "-")
     fixture = (
-        SELF_TEST_FIXTURE
-        .replace("__HOST__", r.hostname or "fakehost.local")
+        SELF_TEST_FIXTURE.replace("__HOST__", r.hostname or "fakehost.local")
         .replace("__CWD__", r.cwd_path)
         .replace("__CWD_TILDE__", cwd_tilde)
         .replace(
@@ -1293,7 +1365,12 @@ def _self_test_context() -> list[str]:
             _ = section_context(r, "sonnet", 5, False)
             rows = _read_fake_log(log)
             expected_model_cmd = [
-                "-p", "/context", "--output-format", "json", "--model", "sonnet",
+                "-p",
+                "/context",
+                "--output-format",
+                "json",
+                "--model",
+                "sonnet",
             ]
             if rows[-1:] != [expected_model_cmd]:
                 failures.append(f"model /context command mismatch: {rows[-1:]}")
@@ -1376,6 +1453,7 @@ def _self_test_publish() -> list[str]:
 
 
 # ---------------------------------------------------------------------- cli --
+
 
 class Args(argparse.Namespace):
     output: str | None = None
@@ -1461,22 +1539,24 @@ def build_report(args: Args, redact: Redact) -> str:
     context_section, usage_summary = section_context(
         redact, args.model, args.timeout, args.no_context
     )
-    sections.extend([
-        context_section,
-        section_global_settings(redact),
-        section_project_settings(redact),
-        section_mcp(redact, args.timeout),
-        section_plugins(redact, args.timeout),
-        section_skills(redact),
-        section_agents(redact, args.include_memories),
-        section_commands(redact),
-        section_memories(redact, args.include_memories),
-        section_hooks(redact),
-        section_state_footprint(redact),
-        section_activity(redact),
-        section_recent_errors(redact),
-        section_footer(redact, usage_summary, args.no_context),
-    ])
+    sections.extend(
+        [
+            context_section,
+            section_global_settings(redact),
+            section_project_settings(redact),
+            section_mcp(redact, args.timeout),
+            section_plugins(redact, args.timeout),
+            section_skills(redact),
+            section_agents(redact, args.include_memories),
+            section_commands(redact),
+            section_memories(redact, args.include_memories),
+            section_hooks(redact),
+            section_state_footprint(redact),
+            section_activity(redact),
+            section_recent_errors(redact),
+            section_footer(redact, usage_summary, args.no_context),
+        ]
+    )
     return redact("\n".join(sections))
 
 
@@ -1500,13 +1580,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             _ = Path(out_path).write_text(report)
             print(
-                f"[claude-diag] wrote {out_path} "
-                + f"({len(report):,} bytes)",
+                f"[claude-diag] wrote {out_path} " + f"({len(report):,} bytes)",
                 file=sys.stderr,
             )
         except Exception as e:
-            print(f"[claude-diag] failed to write {out_path}: {e}",
-                  file=sys.stderr)
+            print(f"[claude-diag] failed to write {out_path}: {e}", file=sys.stderr)
 
     _ = sys.stdout.write(report)
     if not report.endswith("\n"):
