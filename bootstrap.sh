@@ -10,8 +10,13 @@ PYTHON_VERSION=""
 SKIPPED_CANDIDATES=()
 COLOR_ENABLED=0
 UNICODE_ENABLED=0
+DECORATED_ENABLED=0
+TERM_WIDTH=80
+PANEL_WIDTH=72
 
-detect_color() {
+detect_terminal() {
+  local cols
+
   if [ -n "${NO_COLOR:-}" ]; then
     COLOR_ENABLED=0
   elif [ "${FORCE_COLOR:-}" = "0" ]; then
@@ -25,13 +30,33 @@ detect_color() {
   else
     COLOR_ENABLED=0
   fi
-}
 
-detect_unicode() {
   case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
     *[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*) UNICODE_ENABLED=1 ;;
     *) UNICODE_ENABLED=0 ;;
   esac
+
+  if [ "${TERM:-}" != "dumb" ] && [ -t 1 -o -t 2 ]; then
+    DECORATED_ENABLED=1
+  else
+    DECORATED_ENABLED=0
+  fi
+
+  cols="${COLUMNS:-}"
+  if [ -z "$cols" ] && command -v tput >/dev/null 2>&1; then
+    cols="$(tput cols 2>/dev/null || true)"
+  fi
+  case "$cols" in
+    ''|*[!0-9]*) cols=80 ;;
+  esac
+  TERM_WIDTH="$cols"
+  PANEL_WIDTH="$TERM_WIDTH"
+  if [ "$PANEL_WIDTH" -gt 78 ]; then
+    PANEL_WIDTH=78
+  fi
+  if [ "$PANEL_WIDTH" -lt 44 ]; then
+    PANEL_WIDTH=44
+  fi
 }
 
 style() {
@@ -64,6 +89,10 @@ red() {
   style "31" "$*"
 }
 
+blue() {
+  style "34" "$*"
+}
+
 symbol() {
   local name="$1"
   if [ "$UNICODE_ENABLED" -eq 1 ]; then
@@ -73,6 +102,12 @@ symbol() {
       warn) printf '!' ;;
       error) printf '✕' ;;
       arrow) printf '→' ;;
+      h) printf '─' ;;
+      v) printf '│' ;;
+      tl) printf '╭' ;;
+      tr) printf '╮' ;;
+      bl) printf '╰' ;;
+      br) printf '╯' ;;
     esac
   else
     case "$name" in
@@ -81,12 +116,87 @@ symbol() {
       warn) printf '!' ;;
       error) printf 'ERROR' ;;
       arrow) printf '->' ;;
+      h) printf '-' ;;
+      v) printf '|' ;;
+      tl) printf '+' ;;
+      tr) printf '+' ;;
+      bl) printf '+' ;;
+      br) printf '+' ;;
     esac
   fi
 }
 
+repeat_char() {
+  local char="$1"
+  local count="$2"
+  local out=""
+  while [ "$count" -gt 0 ]; do
+    out="${out}${char}"
+    count=$((count - 1))
+  done
+  printf '%s' "$out"
+}
+
 say() {
   printf '%s\n' "$*" > /dev/tty
+}
+
+frame_border() {
+  local left="$1"
+  local right="$2"
+  local h
+  h="$(repeat_char "$(symbol h)" "$((PANEL_WIDTH - 2))")"
+  if [ "$COLOR_ENABLED" -eq 1 ]; then
+    say "$(blue "${left}${h}${right}")"
+  else
+    say "${left}${h}${right}"
+  fi
+}
+
+frame_line() {
+  local text="${1:-}"
+  local inner="$((PANEL_WIDTH - 4))"
+  local len
+  local pad
+
+  len="${#text}"
+  if [ "$len" -gt "$inner" ]; then
+    text="${text:0:$((inner - 3))}..."
+    len="${#text}"
+  fi
+  pad="$(repeat_char " " "$((inner - len))")"
+  say "$(symbol v) ${text}${pad} $(symbol v)"
+}
+
+panel() {
+  local title="$1"
+  shift
+
+  if [ "$DECORATED_ENABLED" -ne 1 ]; then
+    say "$title"
+    for line in "$@"; do
+      if [ -n "$line" ]; then
+        say "$line"
+      else
+        say ""
+      fi
+    done
+    return
+  fi
+
+  frame_border "$(symbol tl)" "$(symbol tr)"
+  frame_line "$title"
+  frame_line ""
+  for line in "$@"; do
+    frame_line "$line"
+  done
+  frame_border "$(symbol bl)" "$(symbol br)"
+}
+
+divider() {
+  if [ "$DECORATED_ENABLED" -eq 1 ]; then
+    say "$(dim "$(repeat_char "$(symbol h)" "$PANEL_WIDTH")")"
+  fi
 }
 
 status() {
@@ -94,16 +204,60 @@ status() {
   shift
   local mark
   mark="$(symbol "$kind")"
-  case "$kind" in
-    ok) say "$(green "$mark") $*" ;;
-    warn) say "$(yellow "$mark") $*" ;;
-    error) say "$(red "$mark") $*" ;;
-    *) say "$mark $*" ;;
-  esac
+  if [ "$DECORATED_ENABLED" -eq 1 ]; then
+    case "$kind" in
+      ok) say "$(green "$mark")  $*" ;;
+      warn) say "$(yellow "$mark")  $*" ;;
+      error) say "$(red "$mark")  $*" ;;
+      *) say "$(dim "$mark")  $*" ;;
+    esac
+  else
+    case "$kind" in
+      ok) say "OK: $*" ;;
+      warn) say "WARN: $*" ;;
+      error) say "ERROR: $*" ;;
+      *) say "$APP_NAME: $*" ;;
+    esac
+  fi
 }
 
 step() {
-  say "$(dim "$(symbol arrow)") $*"
+  if [ "$DECORATED_ENABLED" -eq 1 ]; then
+    say "$(dim "$(symbol arrow)")  $*"
+  else
+    say "$APP_NAME: $*"
+  fi
+}
+
+prompt_yes_no() {
+  local prompt="$1"
+  local default="$2"
+  local suffix reply
+
+  if [ "$default" = "yes" ]; then
+    suffix="[Y/n]"
+  else
+    suffix="[y/N]"
+  fi
+
+  if [ "$DECORATED_ENABLED" -eq 1 ]; then
+    printf '%s %s %s ' "$(bold "$prompt")" "$(dim "$suffix")" "$(dim "$(symbol arrow)")" > /dev/tty
+  else
+    printf '%s %s ' "$prompt" "$suffix" > /dev/tty
+  fi
+  IFS= read -r reply < /dev/tty || die "failed to read from /dev/tty"
+
+  case "$reply" in
+    [yY]|[yY][eE][sS]) return 0 ;;
+    [nN]|[nN][oO]) return 1 ;;
+    "")
+      if [ "$default" = "yes" ]; then
+        return 0
+      fi
+      return 1
+      ;;
+    *) return 1 ;;
+  esac
 }
 
 die() {
@@ -133,8 +287,7 @@ on_signal() {
 trap cleanup EXIT
 trap on_signal HUP INT TERM
 
-detect_color
-detect_unicode
+detect_terminal
 
 if [ ! -r /dev/tty ] || [ ! -w /dev/tty ]; then
   printf '%s\n' "$APP_NAME: interactive terminal required (/dev/tty unavailable)." >&2
@@ -142,26 +295,22 @@ if [ ! -r /dev/tty ] || [ ! -w /dev/tty ]; then
 fi
 
 say ""
-say "$(bold "claude-diag")"
-say "Redacted Claude Code diagnostics for sharing and support."
-say "$(dim "Repository: $REPOSITORY_URL")"
-say ""
-say "This will:"
-say "  $(symbol bullet) choose a compatible Python runtime (3.12+, preferring 3.14)"
-say "  $(symbol bullet) download the diagnostic script"
-say "  $(symbol bullet) run locally and redact sensitive values before output"
+panel \
+  "claude-diag" \
+  "Redacted Claude Code diagnostics for sharing and support." \
+  "Repository: $REPOSITORY_URL" \
+  "" \
+  "This will:" \
+  "  $(symbol bullet) choose a compatible Python runtime (3.12+, preferring 3.14)" \
+  "  $(symbol bullet) download the diagnostic script" \
+  "  $(symbol bullet) run locally and redact sensitive values before output"
 say ""
 
-printf '%s ' "$(bold "Continue?")$(dim " [y/N]")" > /dev/tty
-IFS= read -r reply < /dev/tty || die "failed to read from /dev/tty"
-
-case "$reply" in
-  [yY]|[yY][eE][sS]) ;;
-  *)
-    status warn "Cancelled."
-    exit 0
-    ;;
-esac
+if ! prompt_yes_no "Continue?" "no"; then
+  status warn "Cancelled."
+  exit 0
+fi
+divider
 
 step "Checking prerequisites"
 command -v curl >/dev/null 2>&1 || die "curl is required."
@@ -218,7 +367,8 @@ if [ -z "$PYTHON_BIN" ]; then
 fi
 
 if [ ${#SKIPPED_CANDIDATES[@]} -gt 0 ]; then
-  say "$(dim "Skipped Python candidates:")"
+  say ""
+  status warn "Skipped Python candidates:"
   for item in "${SKIPPED_CANDIDATES[@]}"; do
     say "$(dim "  $(symbol bullet) $item")"
   done
@@ -240,6 +390,7 @@ chmod 600 "$tmpfile"
 
 step "Downloading diagnostic script"
 curl -fsSL "$SCRIPT_URL" -o "$tmpfile"
+status ok "Downloaded diagnostic script"
 
 step "Handing off to diagnostics"
 "$PYTHON_BIN" "$tmpfile" "$@" < /dev/tty

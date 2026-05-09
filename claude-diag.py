@@ -1185,6 +1185,11 @@ def is_interactive_terminal() -> bool:
     return sys.stdin.isatty() and sys.stderr.isatty()
 
 
+def stream_isatty(stream: TextIO) -> bool:
+    isatty = getattr(stream, "isatty", None)
+    return bool(isatty and isatty())
+
+
 def supports_color(stream: TextIO = sys.stderr) -> bool:
     force_color = os.environ.get("FORCE_COLOR")
     if force_color == "0":
@@ -1195,16 +1200,189 @@ def supports_color(stream: TextIO = sys.stderr) -> bool:
         return False
     if force_color is not None:
         return True
-    return stream.isatty()
+    return stream_isatty(stream)
 
 
 def supports_unicode(stream: TextIO = sys.stderr) -> bool:
+    if os.environ.get("TERM") == "dumb":
+        return False
     encoding = getattr(stream, "encoding", None) or locale.getpreferredencoding(False)
     return "utf" in encoding.lower()
 
 
+@dataclass(frozen=True, slots=True)
+class GlyphSet:
+    arrow: str
+    bullet: str
+    success: str
+    warning: str
+    error: str
+    h: str
+    v: str
+    tl: str
+    tr: str
+    bl: str
+    br: str
+    bar_fill: str
+    bar_empty: str
+
+
+@dataclass(frozen=True, slots=True)
+class TerminalSkin:
+    decorated: bool
+    color: bool
+    width: int
+    glyphs: GlyphSet
+
+
+UNICODE_GLYPHS = GlyphSet(
+    arrow="→",
+    bullet="•",
+    success="✓",
+    warning="!",
+    error="✕",
+    h="─",
+    v="│",
+    tl="╭",
+    tr="╮",
+    bl="╰",
+    br="╯",
+    bar_fill="━",
+    bar_empty="·",
+)
+ASCII_GLYPHS = GlyphSet(
+    arrow="->",
+    bullet="-",
+    success="OK",
+    warning="!",
+    error="ERROR",
+    h="-",
+    v="|",
+    tl="+",
+    tr="+",
+    bl="+",
+    br="+",
+    bar_fill="#",
+    bar_empty="-",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class TerminalUI:
+    skin: TerminalSkin
+
+    @classmethod
+    def for_stream(cls, stream: TextIO = sys.stderr) -> "TerminalUI":
+        color = supports_color(stream)
+        unicode = supports_unicode(stream)
+        plain_requested = os.environ.get("NO_COLOR") is not None
+        dumb = os.environ.get("TERM") == "dumb"
+        decorated = color or (
+            stream_isatty(stream) and not plain_requested and not dumb
+        )
+        width = shutil.get_terminal_size(fallback=(80, 24)).columns
+        width = max(48, min(width, 88))
+        glyphs = UNICODE_GLYPHS if unicode else ASCII_GLYPHS
+        return cls(TerminalSkin(decorated, color, width, glyphs))
+
+    def style(
+        self,
+        text: str,
+        *,
+        color: str | None = None,
+        bold: bool = False,
+        dim: bool = False,
+    ) -> str:
+        if not self.skin.color:
+            return text
+
+        codes: list[str] = []
+        if bold:
+            codes.append("1")
+        if dim:
+            codes.append("2")
+        if color == "green":
+            codes.append("32")
+        elif color == "yellow":
+            codes.append("33")
+        elif color == "red":
+            codes.append("31")
+        elif color == "blue":
+            codes.append("34")
+
+        if not codes:
+            return text
+        return f"\033[{';'.join(codes)}m{text}\033[0m"
+
+    def symbol(self, name: str) -> str:
+        return getattr(self.skin.glyphs, name)
+
+    def status(self, message: str, *, kind: str = "info") -> str:
+        if not self.skin.decorated:
+            return f"[claude-diag] {message}"
+
+        if kind == "success":
+            mark = self.style(self.symbol("success"), color="green")
+        elif kind == "warning":
+            mark = self.style(self.symbol("warning"), color="yellow")
+        elif kind == "error":
+            mark = self.style(self.symbol("error"), color="red")
+        else:
+            mark = self.style(self.symbol("arrow"), dim=True)
+        return f"{mark} {message}"
+
+    def prompt(self, prompt: str, suffix: str) -> str:
+        if not self.skin.decorated:
+            return f"{prompt}{suffix}"
+        return (
+            f"{self.style(prompt, bold=True)}"
+            f"{self.style(suffix, dim=True)}"
+            f"{self.style(self.symbol('arrow'), dim=True)} "
+        )
+
+    def panel_lines(self, title: str, lines: Sequence[str]) -> list[str]:
+        if not self.skin.decorated:
+            return [title, *lines]
+
+        width = self.skin.width
+        inner = width - 4
+
+        def fit(text: str) -> str:
+            if len(text) > inner:
+                text = f"{text[: inner - 3]}..."
+            padding = " " * (inner - len(text))
+            return f"{self.symbol('v')} {text}{padding} {self.symbol('v')}"
+
+        border = self.symbol("h") * (width - 2)
+        rendered = [f"{self.symbol('tl')}{border}{self.symbol('tr')}"]
+        rendered.append(fit(title))
+        rendered.append(fit(""))
+        rendered.extend(fit(line) for line in lines)
+        rendered.append(f"{self.symbol('bl')}{border}{self.symbol('br')}")
+        return rendered
+
+    def menu(self, prompt: str, choices: Sequence[str]) -> str:
+        width = len(str(len(choices)))
+        lines = [
+            f"{index:>{width}}. {choice}"
+            for index, choice in enumerate(choices, start=1)
+        ]
+        return "\n".join(self.panel_lines(prompt, lines)) + "\n"
+
+    def progress(self, index: int, total: int, label: str) -> str:
+        if not self.skin.decorated:
+            return f"[{index:02d}/{total:02d}] {label}"
+
+        bar_width = 14
+        filled = max(0, min(bar_width, round((index / total) * bar_width)))
+        glyphs = self.skin.glyphs
+        bar = glyphs.bar_fill * filled + glyphs.bar_empty * (bar_width - filled)
+        count = self.style(f"{index:02d}/{total:02d}", dim=True)
+        return f"{count} {self.style(bar, color='blue')} {label}"
+
+
 def decorated_output(stream: TextIO = sys.stderr) -> bool:
-    return stream.isatty() or supports_color(stream)
+    return TerminalUI.for_stream(stream).skin.decorated
 
 
 def style_text(
@@ -1215,41 +1393,11 @@ def style_text(
     bold: bool = False,
     dim: bool = False,
 ) -> str:
-    if not supports_color(stream):
-        return text
-
-    codes: list[str] = []
-    if bold:
-        codes.append("1")
-    if dim:
-        codes.append("2")
-    if color == "green":
-        codes.append("32")
-    elif color == "yellow":
-        codes.append("33")
-    elif color == "red":
-        codes.append("31")
-
-    if not codes:
-        return text
-    return f"\033[{';'.join(codes)}m{text}\033[0m"
+    return TerminalUI.for_stream(stream).style(text, color=color, bold=bold, dim=dim)
 
 
 def ui_symbol(name: str, stream: TextIO = sys.stderr) -> str:
-    unicode_symbols = {
-        "arrow": "→",
-        "success": "✓",
-        "warning": "!",
-        "error": "✕",
-    }
-    ascii_symbols = {
-        "arrow": "->",
-        "success": "OK",
-        "warning": "!",
-        "error": "ERROR",
-    }
-    symbols = unicode_symbols if supports_unicode(stream) else ascii_symbols
-    return symbols[name]
+    return TerminalUI.for_stream(stream).symbol(name)
 
 
 def ui_status(
@@ -1258,18 +1406,7 @@ def ui_status(
     kind: str = "info",
     stream: TextIO = sys.stderr,
 ) -> str:
-    if not decorated_output(stream):
-        return f"[claude-diag] {message}"
-
-    if kind == "success":
-        mark = style_text(ui_symbol("success", stream), stream=stream, color="green")
-    elif kind == "warning":
-        mark = style_text(ui_symbol("warning", stream), stream=stream, color="yellow")
-    elif kind == "error":
-        mark = style_text(ui_symbol("error", stream), stream=stream, color="red")
-    else:
-        mark = style_text(ui_symbol("arrow", stream), stream=stream, dim=True)
-    return f"{mark} {message}"
+    return TerminalUI.for_stream(stream).status(message, kind=kind)
 
 
 def prompt_confirm(
@@ -1280,15 +1417,11 @@ def prompt_confirm(
     output_stream: TextIO = sys.stderr,
 ) -> bool:
     suffix = " [Y/n] " if default else " [y/N] "
-    if decorated_output(output_stream):
-        rendered_prompt = style_text(prompt, stream=output_stream, bold=True)
-        rendered_suffix = style_text(suffix, stream=output_stream, dim=True)
-    else:
-        rendered_prompt = prompt
-        rendered_suffix = suffix
+    ui = TerminalUI.for_stream(output_stream)
+    rendered_prompt = ui.prompt(prompt, suffix)
 
     while True:
-        _ = output_stream.write(f"{rendered_prompt}{rendered_suffix}")
+        _ = output_stream.write(rendered_prompt)
         output_stream.flush()
         reply = input_stream.readline()
         if reply == "":
@@ -1302,7 +1435,7 @@ def prompt_confirm(
             return True
         if normalized in {"n", "no"}:
             return False
-        if decorated_output(output_stream):
+        if ui.skin.decorated:
             _ = output_stream.write(
                 ui_status(
                     "Please answer yes or no.",
@@ -1326,28 +1459,19 @@ def prompt_select(
         raise ValueError("prompt_select requires at least one choice")
 
     width = len(str(len(choices)))
-    styled = decorated_output(output_stream)
+    ui = TerminalUI.for_stream(output_stream)
     while True:
-        if styled:
-            _ = output_stream.write(
-                f"{style_text(prompt, stream=output_stream, bold=True)}\n"
-            )
+        if ui.skin.decorated:
+            _ = output_stream.write(ui.menu(prompt, choices))
         else:
             _ = output_stream.write(f"{prompt}\n")
-        for index, choice in enumerate(choices, start=1):
-            number = f"{index:>{width}}."
-            if styled:
-                number = style_text(number, stream=output_stream, dim=True)
-            _ = output_stream.write(f"  {number} {choice}\n")
-        if styled:
-            selector = style_text(
-                ui_symbol("arrow", output_stream),
-                stream=output_stream,
-                dim=True,
-            )
-            _ = output_stream.write(f"{selector} Select [1-{len(choices)}]: ")
-        else:
+            for index, choice in enumerate(choices, start=1):
+                number = f"{index:>{width}}."
+                _ = output_stream.write(f"  {number} {choice}\n")
             _ = output_stream.write(f"Select [1-{len(choices)}]: ")
+        if ui.skin.decorated:
+            selector = ui.style(ui.symbol("arrow"), dim=True)
+            _ = output_stream.write(f"{selector} Select [1-{len(choices)}]: ")
         output_stream.flush()
 
         reply = input_stream.readline()
@@ -1360,7 +1484,7 @@ def prompt_select(
             selected = int(normalized)
             if 1 <= selected <= len(choices):
                 return selected - 1
-        if styled:
+        if ui.skin.decorated:
             _ = output_stream.write(
                 ui_status(
                     f"Please enter a number from 1 to {len(choices)}.",
@@ -1961,20 +2085,10 @@ def write_progress(
     progress_stream: TextIO | None,
 ) -> None:
     if progress_stream is not None:
-        if decorated_output(progress_stream):
-            count = style_text(
-                f"{index:02d}/{total:02d}",
-                stream=progress_stream,
-                dim=True,
-            )
-            arrow = style_text(
-                ui_symbol("arrow", progress_stream),
-                stream=progress_stream,
-                dim=True,
-            )
-            print(f"{count} {arrow} {label}", file=progress_stream)
-        else:
-            print(f"[{index:02d}/{total:02d}] {label}", file=progress_stream)
+        print(
+            TerminalUI.for_stream(progress_stream).progress(index, total, label),
+            file=progress_stream,
+        )
 
 
 def build_report(
@@ -2144,13 +2258,16 @@ def finish_report(
     ):
         write_report_stdout(report, stdout_stream)
     elif saved_path is not None:
-        print(
-            ui_status(
-                f"view later: cat {shlex.quote(saved_path)}",
-                stream=output_stream,
-            ),
-            file=output_stream,
-        )
+        command = f"cat {shlex.quote(saved_path)}"
+        ui = TerminalUI.for_stream(output_stream)
+        if ui.skin.decorated:
+            for line in ui.panel_lines("View report later", [command]):
+                print(line, file=output_stream)
+        else:
+            print(
+                ui_status(f"view later: {command}", stream=output_stream),
+                file=output_stream,
+            )
     return 0
 
 
